@@ -1,24 +1,47 @@
+using SiaWebhookApi.Models;
+using SiaWebhookApi.Services;
+using SiaWebhookApi.Configuration;
+
 var builder = WebApplication.CreateBuilder(args);
+var siaSettings = builder.Configuration.GetSection("SiaSettings").Get<SiaSettings>();
+if (siaSettings == null)
+    throw new InvalidOperationException("SiaSettings missing from appsettings.json");
 var app = builder.Build();
 
 // This is the Webhook catcher
-app.MapPost("/zepcam-panic", async (ZepcamData data) =>
+app.MapPost("/zepcam-panic", async (DataTransferObject data) =>
 {
-    // 1. We got the HTTP JSON from Zepcam
-    Console.WriteLine($"[ALERT] Received from Camera: {data.CameraId}");
+    // 1. Create the SIA message object with hardcoded defaults for now
+    var siaMessage = new SiaMessage()
+    {
+        Latitude = data.Location.Latitude,
+        Longitude = data.Location.Longitude,
+        ExtendedData = $"{data.UserName}|{data.UserExternalId}|{data.Issuer}"
+    };
 
-    // 2. Build the payload and do the math (calling your separate SiaMath class!)
-    string targetPayload = $"\"SIA-DCS\"0001R0L0#{data.CameraId}[#{data.CameraId}|NPA001]_12:09:30,02-23-2026";
-    string lengthHex = SiaMath.CalculateLength(targetPayload);
-    string crcHex = SiaMath.CalculateCrc(targetPayload);
-    string finalMessage = $"\n{crcHex}{lengthHex}{targetPayload}\r";
+    // 2. Get the encryption key and build the message builder
+    SiaMessageBuilder messageBuilder;
+    if (siaSettings.EncryptionKey == null)
+        messageBuilder = new SiaMessageBuilder();
+    else
+        messageBuilder = new SiaMessageBuilder(new SiaCryptoService(System.Text.Encoding.ASCII.GetBytes(siaSettings.EncryptionKey)));
 
-    // 3. Send it via TCP (We will use the SiaTransmitter class for this soon)
-    // string response = await SiaTransmitter.SendAsync("123.45.67.89", 10001, finalMessage);
+    // 3. Build the payload string from the SIA message properties
+    string payload = messageBuilder.Build(siaMessage);
+
+    // 4. Calculate length and CRC on the payload
+    string lengthHex = SiaMath.CalculateLength(payload);
+    string crcHex = SiaMath.CalculateCrc(payload);
+
+    // 5. Wrap the final message with the frame delimiters
+    string finalMessage = $"\n{crcHex}{lengthHex}{payload}\r";
+
+    Console.WriteLine($"[SIA] Final message: {finalMessage}");
+
+    // 6. Send via TCP (coming soon)
+    string response = await SiaTransmitter.Connect(siaSettings.IpAddress, siaSettings.Port, finalMessage);
 
     return Results.Ok(new { Status = "Processed" });
 });
 
 app.Run();
-
-public record ZepcamData(string CameraId, string AlertType, DateTime Timestamp);
