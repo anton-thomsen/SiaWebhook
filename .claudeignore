@@ -1,0 +1,13 @@
+# Build artifacts - no source value for Claude
+**/bin/
+**/obj/
+
+# Claude worktrees
+.claude/worktrees/
+
+# JetBrains IDE metadata
+.idea/
+
+# OS noise
+.DS_Store
+Thumbs.db

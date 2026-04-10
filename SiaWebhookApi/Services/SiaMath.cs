@@ -1,8 +1,9 @@
-﻿using System;
 using System.Text;
 
+namespace SiaWebhookApi.Services;
+
 /// <summary>
-/// Utility class for SIA DC-09 protocol calculations. 
+/// Utility class for SIA DC-09 protocol calculations.
 /// Isolates the byte-level math from the routing logic for clean architecture and easy unit testing.
 /// </summary>
 public static class SiaMath
@@ -14,14 +15,15 @@ public static class SiaMath
     /// <param name="targetString">The string starting from the first quote of the ID token up to the timestamp.</param>
     public static string CalculateLength(string targetString)
     {
-        // 1. Get the actual byte count. We use ASCII because C# strings are UTF-16 by default, 
+        // 1. Get the actual byte count. We use ASCII because C# strings are UTF-16 by default,
         // and the SIA protocol strictly operates on ASCII bytes.
-       int byteCount = Encoding.ASCII.GetByteCount(targetString);
-       
-        // 2. Format as a 4-character hex string starting with '0'. 
+        int byteCount = Encoding.ASCII.GetByteCount(targetString);
+
+        // 2. Format as a 4-character hex string starting with '0'.
         // "X3" tells C# to format the integer as a 3-digit uppercase hex string.
-       return $"0{byteCount:X3}";
+        return $"0{byteCount:X3}";
     }
+
     /// <summary>
     /// Calculates the CRC-16 checksum for the SIA message to ensure data integrity over the network.
     /// Uses the standard CCITT polynomial (0x1021).
@@ -31,40 +33,36 @@ public static class SiaMath
     {
         byte[] bytes = Encoding.ASCII.GetBytes(targetString);
 
-        // 1. Standard starting value for this specific crc Algorithm.
+        // 1. Standard starting value for this specific CRC algorithm.
         ushort crc = 0x0000;
 
         // 2. The "Polynomial". Think of this as a mathematical mask used to scramble the data predictably.
-        ushort polynomial = 0x1021;
+        ushort polynomial = 0xA001;
 
         // 3. Loop through every single byte in your target string
         foreach (byte b in bytes)
         {
-            
-            // XOR (^) the byte into the top 8 bits of the 16-bit CRC
-            crc ^= (ushort)(b << 8);
+            // XOR the byte into the top 8 bits of the 16-bit CRC
+            crc ^= b;
 
-            // 4. Loop through every single byte
+            // 4. Loop through every single bit
             for (int i = 0; i < 8; i++)
             {
-                // 5. check if the first bit is 1 or 0
-                if ((crc & 0x8000) != 0)
+                // 5. Check if the first bit is 1 or 0
+                if ((crc & 0x0001) != 0)
                 {
-                    // 6. If it's 1 then it will:
-                    // Move the whole crc one bit to the left,
-                    // The far right of the crc becomes 0,
-                    // Then we do a scramble using the polynomial 0x1021.
-                    crc = (ushort)((crc << 1) ^ polynomial);
+                    // 6. If it's 1: shift left and scramble with the polynomial
+                    crc = (ushort)((crc >> 1) ^ polynomial);
                 }
                 else
                 {
-                    // 7. If the first bit is 0 then don't scramble and just move on step to the left. 
-                    crc <<= 1;
+                    // 7. If it's 0: just shift left
+                    crc >>= 1;
                 }
             }
         }
-        // 8. When the whole scramble thing is done then we return the crc value to a Hexdecimal string with 4 characters
+
+        // 8. Return the CRC as a 4-character uppercase hex string
         return crc.ToString("X4");
     }
-    
 }

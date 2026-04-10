@@ -1,0 +1,58 @@
+# Build output
+bin/
+obj/
+
+# .NET
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+
+# Rider / JetBrains
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/usage.statistics.xml
+.idea/**/shelf/
+.idea/**/contentModel.xml
+.idea/**/modules.xml
+.idea/**/.idea.*.iml
+.idea/**/projectSettingsUpdater.xml
+.idea/**/dataSources/
+.idea/**/dataSources.local.xml
+.idea/**/sqlDataSources.xml
+.idea/**/dynamic.xml
+.idea/**/uiDesigner.xml
+.idea/**/dbnavigator.xml
+.idea/**/gradle.xml
+.idea/**/libraries/
+*.iml
+
+# VS Code
+.vscode/
+
+# Visual Studio
+.vs/
+*.VC.db
+*.VC.VC.opendb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / config overrides
+appsettings.*.local.json
+*.pfx
+*.p12
+secrets.json
+
+# Claude Code worktrees
+.claude/worktrees/
