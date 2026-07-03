@@ -16,6 +16,12 @@ public static class ZepcamWebhookValidator
     public const int MaxIdentityFieldLength = 64;
     public const int MaxSiaPayloadBytes = 4095;
 
+    // A panic alarm is only actionable near real time: anything older than a
+    // day is a replay or a very stuck queue, and future timestamps beyond
+    // normal clock skew indicate a forged or misconfigured sender.
+    public static readonly TimeSpan MaxTimestampAge = TimeSpan.FromHours(24);
+    public static readonly TimeSpan MaxFutureSkew = TimeSpan.FromMinutes(5);
+
     private static readonly char[] DelimitersAndControls = ['\r', '\n', '[', ']', '|', '_'];
 
     public static (bool IsValid, string? Error) Validate(DataTransferObject data)
@@ -28,6 +34,16 @@ public static class ZepcamWebhookValidator
 
         if (!TryParseCoordinate(data.Location.Longitude, -180, 180))
             return (false, "'location.longitude' must be a numeric value between -180 and 180.");
+
+        if (data.Timestamp == default)
+            return (false, "Missing or invalid 'timestamp' field.");
+
+        var now = DateTimeOffset.UtcNow;
+        if (data.Timestamp > now.Add(MaxFutureSkew))
+            return (false, "'timestamp' is too far in the future.");
+
+        if (data.Timestamp < now.Subtract(MaxTimestampAge))
+            return (false, "'timestamp' is too old.");
 
         foreach (var (fieldName, value) in new[]
         {

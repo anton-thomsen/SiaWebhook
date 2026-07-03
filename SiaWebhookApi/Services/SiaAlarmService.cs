@@ -28,7 +28,10 @@ public class SiaAlarmService : ISiaAlarmService
             SequenceNumber = _seqCounter.Next(),
             Latitude       = data.Location!.Latitude!,
             Longitude      = data.Location.Longitude!,
-            ExtendedData   = $"{data.UserName}|{data.UserExternalId}|{data.Issuer}"
+            ExtendedData   = $"{data.UserName}|{data.UserExternalId}|{data.Issuer}",
+            // Carry the (validated) event time from Zepcam into the SIA frame
+            // instead of stamping transmission time — they differ under retry.
+            Timestamp      = data.Timestamp
         };
 
         SiaMessageBuilder messageBuilder = string.IsNullOrEmpty(settings.EncryptionKey)

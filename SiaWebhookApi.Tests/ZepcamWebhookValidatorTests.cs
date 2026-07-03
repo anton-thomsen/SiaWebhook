@@ -78,6 +78,51 @@ public class ZepcamWebhookValidatorTests
     }
 
     [Fact]
+    public void Validate_MissingTimestamp_ReturnsInvalid()
+    {
+        var dto = ValidDto();
+        dto.Timestamp = default;
+
+        var result = ZepcamWebhookValidator.Validate(dto);
+
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_StaleTimestamp_ReturnsInvalid()
+    {
+        var dto = ValidDto();
+        dto.Timestamp = DateTimeOffset.UtcNow.Subtract(ZepcamWebhookValidator.MaxTimestampAge).AddMinutes(-1);
+
+        var result = ZepcamWebhookValidator.Validate(dto);
+
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_FutureTimestamp_ReturnsInvalid()
+    {
+        var dto = ValidDto();
+        dto.Timestamp = DateTimeOffset.UtcNow.Add(ZepcamWebhookValidator.MaxFutureSkew).AddMinutes(1);
+
+        var result = ZepcamWebhookValidator.Validate(dto);
+
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void Validate_SlightlySkewedOrRecentTimestamp_IsAccepted()
+    {
+        var recent = ValidDto();
+        recent.Timestamp = DateTimeOffset.UtcNow.AddHours(-1);
+        Assert.True(ZepcamWebhookValidator.Validate(recent).IsValid);
+
+        var skewed = ValidDto();
+        skewed.Timestamp = DateTimeOffset.UtcNow.AddMinutes(2);
+        Assert.True(ZepcamWebhookValidator.Validate(skewed).IsValid);
+    }
+
+    [Fact]
     public void EnsurePayloadFits_OverLimit_Throws()
     {
         Assert.Throws<InvalidOperationException>(() =>

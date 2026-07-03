@@ -91,6 +91,23 @@ public class SiaAlarmServiceTests
         Assert.Equal("ACK \"SIA-DCS\" 0001", result);
     }
 
+    [Fact]
+    public async Task SendAlarmAsync_FrameCarriesWebhookTimestamp_NotTransmissionTime()
+    {
+        var mock = new Mock<ISiaTransmitter>();
+        string? captured = null;
+        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()))
+            .Callback<string, int, string>((_, _, msg) => captured = msg)
+            .ReturnsAsync("ACK");
+
+        var dto = MakeDto();
+        dto.Timestamp = new DateTimeOffset(2026, 7, 1, 8, 30, 15, TimeSpan.Zero);
+        await BuildService(mock).SendAlarmAsync(dto, MakeSettings());
+
+        // SiaMessageBuilder renders the timestamp as _HH:mm:ss,MM-dd-yyyy
+        Assert.Contains("_08:30:15,07-01-2026", captured);
+    }
+
     // ── Encryption wiring ─────────────────────────────────────────────
 
     [Fact]
