@@ -56,3 +56,10 @@ secrets.json
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Local secrets (never commit)
+.env
+.env.local
+
+# Runtime alarm state files
+data/

@@ -1,0 +1,33 @@
+# --- Dependencies ---
+FROM node:22.21.1-alpine3.22 AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# --- Build ---
+FROM node:22.21.1-alpine3.22 AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# --- Runtime (standalone) ---
+FROM node:22.21.1-alpine3.22 AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+# Run as a non-root user.
+RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
+
+# Standalone output bundles a minimal server + only the needed node_modules.
+COPY --from=build /app/public ./public
+COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+EXPOSE 3000
+CMD ["node", "server.js"]
