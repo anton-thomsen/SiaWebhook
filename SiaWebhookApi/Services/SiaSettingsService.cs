@@ -1,0 +1,116 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using SiaWebhookApi.Configuration;
+
+namespace SiaWebhookApi.Services;
+
+public class SiaSettingsService
+{
+    private SiaSettings _current;
+    private readonly string _appsettingsPath;
+    private readonly ILogger<SiaSettingsService> _logger;
+    private readonly ISiaTransmitter _transmitter;
+    private readonly object _lock = new();
+
+    public SiaSettingsService(
+        IWebHostEnvironment env,
+        ILogger<SiaSettingsService> logger,
+        IConfiguration configuration,
+        ISiaTransmitter transmitter)
+    {
+        _logger = logger;
+        _transmitter = transmitter;
+        _appsettingsPath = Path.Combine(env.ContentRootPath, "appsettings.json");
+        _current = configuration.GetSection("SiaSettings").Get<SiaSettings>()
+            ?? new SiaSettings { IpAddress = "", Port = 0, EncryptionKey = null };
+    }
+
+    public SiaSettings Get()
+    {
+        SiaSettings copy;
+        lock (_lock)
+        {
+            copy = new SiaSettings
+            {
+                IpAddress      = _current.IpAddress,
+                Port           = _current.Port,
+                EncryptionKey  = _current.EncryptionKey,
+                AccountNumber  = _current.AccountNumber,
+                ReceiverNumber = _current.ReceiverNumber,
+                AccountPrefix  = _current.AccountPrefix,
+                EventCode      = _current.EventCode
+            };
+        }
+        // Environment variable takes precedence — keeps the secret out of appsettings.json in prod
+        var envKey = Environment.GetEnvironmentVariable("SIA_ENCRYPTION_KEY");
+        if (!string.IsNullOrEmpty(envKey))
+            copy.EncryptionKey = envKey;
+        return copy;
+    }
+
+    public async Task<(bool success, string? error)> UpdateAsync(SiaSettings updated)
+    {
+        try
+        {
+            await PersistToDiskAsync(updated);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to persist SiaSettings to appsettings.json");
+            return (false, ex.Message);
+        }
+
+        lock (_lock)
+        {
+            _current = new SiaSettings
+            {
+                IpAddress      = updated.IpAddress,
+                Port           = updated.Port,
+                EncryptionKey  = updated.EncryptionKey,
+                AccountNumber  = updated.AccountNumber,
+                ReceiverNumber = updated.ReceiverNumber,
+                AccountPrefix  = updated.AccountPrefix,
+                EventCode      = updated.EventCode
+            };
+        }
+
+        _logger.LogInformation("SiaSettings updated: IP={Ip} Port={Port}", updated.IpAddress, updated.Port);
+        return (true, null);
+    }
+
+    private async Task PersistToDiskAsync(SiaSettings settings)
+    {
+        string rawJson = await File.ReadAllTextAsync(_appsettingsPath);
+        JsonNode root = JsonNode.Parse(rawJson)!;
+        root["SiaSettings"] = new JsonObject
+        {
+            ["IpAddress"]      = settings.IpAddress,
+            ["Port"]           = settings.Port,
+            ["EncryptionKey"]  = settings.EncryptionKey ?? string.Empty,
+            ["AccountNumber"]  = settings.AccountNumber,
+            ["ReceiverNumber"] = settings.ReceiverNumber,
+            ["AccountPrefix"]  = settings.AccountPrefix,
+            ["EventCode"]      = settings.EventCode
+        };
+        string json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+
+        // Write to temp then atomically replace — prevents a partial write from corrupting appsettings.json
+        string tempPath = _appsettingsPath + ".tmp";
+        await File.WriteAllTextAsync(tempPath, json);
+        File.Replace(tempPath, _appsettingsPath, null);
+    }
+
+    public async Task<(bool success, string? error)> TestConnectionAsync()
+    {
+        var s = Get();
+        try
+        {
+            var result = await _transmitter.SendAsync(s.IpAddress, s.Port, "");
+            return result.Success ? (true, null) : (false, result.Error);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+}
