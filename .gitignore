@@ -60,3 +60,6 @@ secrets.json
 # Local secrets (never commit)
 .env
 .env.local
+
+# Runtime alarm state files
+data/

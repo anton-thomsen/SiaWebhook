@@ -67,7 +67,8 @@ public class SiaSettingsServiceTests : IDisposable
             env.Object,
             NullLogger<SiaSettingsService>.Instance,
             config,
-            Mock.Of<ISiaTransmitter>());
+            Mock.Of<ISiaTransmitter>(),
+            new SiaRuntimeSettingsOptions { FilePath = Path.Combine(_tempDir, "settings.json") });
     }
 
     private static SiaSettingsUpdateRequest ValidUpdate() => new()
@@ -77,6 +78,20 @@ public class SiaSettingsServiceTests : IDisposable
         AccountPrefix  = "L1",
         EventCode      = "NPA"
     };
+
+    [Fact]
+    public async Task UpdateAsync_PersistedSettings_SurviveRestart()
+    {
+        var (success, _) = await BuildService().UpdateAsync(ValidUpdate());
+        Assert.True(success);
+
+        // A fresh service instance (same settings file) simulates a container
+        // restart: the UI-edited identity fields must be overlaid from disk.
+        var restarted = BuildService();
+
+        Assert.Equal("A002", restarted.Get().AccountNumber);
+        Assert.Equal("R1", restarted.Get().ReceiverNumber);
+    }
 
     // ── Blocker 5: no key exposure ────────────────────────────────────
 

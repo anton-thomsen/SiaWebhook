@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="SiaWebhookApi/SiaWebhookApi.csproj" />
+  <Project Path="SiaWebhookApi.Tests/SiaWebhookApi.Tests.csproj" />
 </Solution>

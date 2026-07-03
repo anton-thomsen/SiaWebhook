@@ -42,7 +42,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 builder.Services.AddAuthorization();
 
-// Per-IP rate limiting for the public webhook: 10 requests/minute.
+var webhookPermitLimit = GetIntConfig("WEBHOOK_RATE_LIMIT_PER_MINUTE", "WebhookRateLimit:PermitLimit", 60);
+var webhookQueueLimit = GetIntConfig("WEBHOOK_RATE_LIMIT_QUEUE", "WebhookRateLimit:QueueLimit", 20);
+
+// Per-IP rate limiting for the public webhook. The default deliberately allows
+// a bursty multi-guard incident from one Zepcam NAT IP while still bounding abuse.
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -51,8 +55,10 @@ builder.Services.AddRateLimiter(options =>
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
             factory: _ => new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 10,
-                Window = TimeSpan.FromMinutes(1)
+                PermitLimit = webhookPermitLimit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = webhookQueueLimit,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst
             }));
 
     // Throttle login to slow brute-force password guessing: 5 attempts/minute per IP.
@@ -78,6 +84,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 });
 
 // Core services
+builder.Services.AddSingleton(SiaSequenceOptions.Load(builder.Configuration, builder.Environment));
+builder.Services.AddSingleton(SiaRuntimeSettingsOptions.Load(builder.Configuration, builder.Environment));
 builder.Services.AddSingleton<ISiaTransmitter, SiaTransmitter>();
 builder.Services.AddSingleton<SiaSequenceCounter>();
 builder.Services.AddSingleton<SiaSettingsService>();
@@ -152,3 +160,9 @@ app.MapPost("/zepcam-panic", async (
     .RequireRateLimiting("zepcam-webhook");
 
 app.Run();
+
+int GetIntConfig(string envName, string configKey, int fallback)
+{
+    var raw = Environment.GetEnvironmentVariable(envName) ?? builder.Configuration[configKey];
+    return int.TryParse(raw, out var parsed) && parsed > 0 ? parsed : fallback;
+}

@@ -43,6 +43,9 @@ are missing. In **Development** it falls back to insecure defaults with a loud w
 | `ZEPCAM_API_KEY` | Webhook shared secret |
 | `SIA_ENCRYPTION_KEY` | Optional AES-256 key (32 ASCII chars) |
 | `SIA_RECEIVER_IP`, `SIA_RECEIVER_PORT` | Env-only receiver routing — always win over stored settings, never editable via the UI |
+| `SIA_SETTINGS_FILE` | Durable UI-editable settings file path |
+| `SIA_SEQUENCE_FILE` | Durable SIA sequence counter path |
+| `WEBHOOK_RATE_LIMIT_PER_MINUTE`, `WEBHOOK_RATE_LIMIT_QUEUE` | Webhook per-IP rate limit (default 60/min + queue of 20) |
 
 ## Local development
 
@@ -79,14 +82,20 @@ Docker network via `API_BASE_URL=http://api:8080`; Coolify's Traefik handles TLS
 > divert panic alarms to another endpoint. To change them, update the VPS
 > environment and redeploy.
 
-> **Settings persistence:** the API persists UI edits by rewriting `appsettings.json`,
-> which is **ephemeral in a container** — changes are lost on restart. For durable config,
-> set the `SiaSettings__*` environment variables (see `.env.example`); these override
-> `appsettings.json` at startup. Making in-container UI edits durable (a mounted data
-> volume) is a known follow-up.
+> **Durable runtime state:** the API writes harmless UI settings, the SIA sequence
+> counter, and dead-letter alarms under `/app/data`, backed by the `api-data` Docker
+> volume — they survive container restarts. Receiver IP/port and the encryption key
+> stay env-only and are never editable through the UI.
+
+> **SameSite / CSRF:** the admin session cookie is `httpOnly`, `Secure` in Production,
+> and `SameSite=Lax`. That blocks normal cross-site POSTs from carrying the cookie, and
+> the app does not enable browser CORS for credentialed cross-origin calls. If the admin
+> UI ever needs third-party embedding or cross-site integrations, add explicit CSRF
+> tokens before loosening those cookie/header assumptions.
 
 ## Tests
 
 ```bash
-dotnet test        # 35 unit tests (CRC, crypto, message builder, alarm service)
+dotnet test        # API + test project are both in SiaWebhookApi.slnx
+cd webapp && npm run lint && npm run build
 ```

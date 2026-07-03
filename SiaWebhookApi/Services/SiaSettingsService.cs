@@ -7,7 +7,7 @@ namespace SiaWebhookApi.Services;
 public class SiaSettingsService
 {
     private SiaSettings _current;
-    private readonly string _appsettingsPath;
+    private readonly SiaRuntimeSettingsOptions _options;
     private readonly ILogger<SiaSettingsService> _logger;
     private readonly ISiaTransmitter _transmitter;
     private readonly object _lock = new();
@@ -16,13 +16,15 @@ public class SiaSettingsService
         IWebHostEnvironment env,
         ILogger<SiaSettingsService> logger,
         IConfiguration configuration,
-        ISiaTransmitter transmitter)
+        ISiaTransmitter transmitter,
+        SiaRuntimeSettingsOptions options)
     {
         _logger = logger;
         _transmitter = transmitter;
-        _appsettingsPath = Path.Combine(env.ContentRootPath, "appsettings.json");
+        _options = options;
         _current = configuration.GetSection("SiaSettings").Get<SiaSettings>()
             ?? new SiaSettings { IpAddress = "", Port = 0, EncryptionKey = null };
+        OverlayPersistedSettings();
     }
 
     /// <summary>
@@ -104,7 +106,7 @@ public class SiaSettingsService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to persist SiaSettings to appsettings.json");
+            _logger.LogError(ex, "Failed to persist SiaSettings to {Path}", _options.FilePath);
             return (false, ex.Message);
         }
 
@@ -121,26 +123,48 @@ public class SiaSettingsService
     private static bool HasReservedChars(params string[] values) =>
         values.Any(v => string.IsNullOrWhiteSpace(v) || v.IndexOfAny(['\r', '\n', '[', ']', '|', '_']) >= 0);
 
+    // UI edits go to a dedicated file (SIA_SETTINGS_FILE, on the mounted /app/data
+    // volume in Docker) so they survive container restarts — the old approach of
+    // rewriting appsettings.json was ephemeral in a container. Only the harmless
+    // identity/event fields are written; never the receiver endpoint or the key.
     private async Task PersistToDiskAsync(SiaSettings settings)
     {
-        string rawJson = await File.ReadAllTextAsync(_appsettingsPath);
-        JsonNode root = JsonNode.Parse(rawJson)!;
-        root["SiaSettings"] = new JsonObject
+        var persisted = new JsonObject
         {
-            ["IpAddress"]      = settings.IpAddress,
-            ["Port"]           = settings.Port,
-            ["EncryptionKey"]  = settings.EncryptionKey ?? string.Empty,
             ["AccountNumber"]  = settings.AccountNumber,
             ["ReceiverNumber"] = settings.ReceiverNumber,
             ["AccountPrefix"]  = settings.AccountPrefix,
             ["EventCode"]      = settings.EventCode
         };
-        string json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        string json = persisted.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
 
-        // Write to temp then atomically replace — prevents a partial write from corrupting appsettings.json
-        string tempPath = _appsettingsPath + ".tmp";
+        // Write to temp then atomically replace — prevents a partial write from corrupting runtime settings.
+        Directory.CreateDirectory(Path.GetDirectoryName(_options.FilePath)!);
+        string tempPath = _options.FilePath + ".tmp";
         await File.WriteAllTextAsync(tempPath, json);
-        File.Replace(tempPath, _appsettingsPath, null);
+        File.Move(tempPath, _options.FilePath, overwrite: true);
+    }
+
+    private void OverlayPersistedSettings()
+    {
+        if (!File.Exists(_options.FilePath))
+            return;
+
+        try
+        {
+            var root = JsonNode.Parse(File.ReadAllText(_options.FilePath));
+            if (root is null)
+                return;
+
+            _current.AccountNumber = root["AccountNumber"]?.GetValue<string>() ?? _current.AccountNumber;
+            _current.ReceiverNumber = root["ReceiverNumber"]?.GetValue<string>() ?? _current.ReceiverNumber;
+            _current.AccountPrefix = root["AccountPrefix"]?.GetValue<string>() ?? _current.AccountPrefix;
+            _current.EventCode = root["EventCode"]?.GetValue<string>() ?? _current.EventCode;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            _logger.LogError(ex, "Failed to load persisted SIA runtime settings from {Path}", _options.FilePath);
+        }
     }
 
     public async Task<(bool success, string? error)> TestConnectionAsync()
