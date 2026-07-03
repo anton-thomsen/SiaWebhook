@@ -1,37 +1,64 @@
 using System.Net.Sockets;
+using System.Text;
 
 namespace SiaWebhookApi.Services;
 
-public class SiaTransmitter
+public sealed class SiaTransmitter : ISiaTransmitter
 {
-    public static async Task<string> Connect(string ipAddress, int port, string message)
+    private readonly ILogger<SiaTransmitter> _logger;
+
+    public SiaTransmitter(ILogger<SiaTransmitter> logger)
     {
+        _logger = logger;
+    }
+
+    public async Task<SiaTransmissionResult> SendAsync(
+        string ipAddress,
+        int port,
+        string message,
+        CancellationToken cancellationToken = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
-            // The using declaration ensures that the TcpClient is disposed of when the block is exited.
-            using TcpClient client = new TcpClient(ipAddress, port);
-            // Convert the message to bytes using ASCII encoding.
-            Byte[] data = System.Text.Encoding.ASCII.GetBytes(message);
-            // This opens a stream between the client and the server.
+            using TcpClient client = new();
+            await client.ConnectAsync(ipAddress, port, cts.Token);
+
+            // Empty message means connectivity test only — don't send anything
+            if (string.IsNullOrEmpty(message))
+                return SiaTransmissionResult.Ack("OK");
+
             NetworkStream stream = client.GetStream();
-            // This writes the data to the stream.
-            await stream.WriteAsync(data);
-            // This recieves the data from the stream
-            int bytes = await stream.ReadAsync(data);
-            // This converts the data back to a string using ASCII encoding.
-            string responseData = System.Text.Encoding.ASCII.GetString(data, 0, bytes);
-            Console.WriteLine(responseData);
-            return responseData;
+            stream.ReadTimeout  = 5000;
+            stream.WriteTimeout = 5000;
+
+            byte[] sendBuffer = Encoding.ASCII.GetBytes(message);
+            await stream.WriteAsync(sendBuffer, cts.Token);
+
+            byte[] readBuffer = new byte[1024];
+            int bytesRead = await stream.ReadAsync(readBuffer, cts.Token);
+            string response = Encoding.ASCII.GetString(readBuffer, 0, bytesRead);
+
+            _logger.LogDebug("TCP response from {Ip}:{Port} — {Response}", ipAddress, port, response);
+            return SiaAckParser.IsAck(response)
+                ? SiaTransmissionResult.Ack(response)
+                : SiaTransmissionResult.Failed(SiaAckParser.DescribeFailure(response), response);
         }
-        catch (ArgumentNullException ex)
+        catch (OperationCanceledException)
         {
-            Console.WriteLine("ArgumentNullException: " + ex.Message);
-            return "ERROR: " + ex.Message;
+            _logger.LogWarning("TCP connection to {Ip}:{Port} timed out", ipAddress, port);
+            return SiaTransmissionResult.Failed("Connection timed out after 5 seconds");
         }
         catch (SocketException ex)
         {
-            Console.WriteLine("SocketException: " + ex.Message);
-            return "ERROR: " + ex.Message;
+            _logger.LogError(ex, "SocketException connecting to {Ip}:{Port}", ipAddress, port);
+            return SiaTransmissionResult.Failed(ex.Message);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogError(ex, "I/O error communicating with {Ip}:{Port}", ipAddress, port);
+            return SiaTransmissionResult.Failed(ex.Message);
         }
     }
 }
