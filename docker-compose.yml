@@ -1,0 +1,62 @@
+# SIA Webhook stack — two independently deployable services.
+#
+#   web  (Next.js)  — the admin UI + BFF. The browser only ever talks to this.
+#   api  (.NET)     — the SIA pipeline: receives Zepcam webhooks, serves the
+#                     JWT-protected settings API that the web BFF calls internally.
+#
+# On Coolify: give `web` the public admin domain, and route the public
+# webhook URL (…/zepcam-panic) to `api`. The web↔api hop stays on the
+# internal Docker network (API_BASE_URL=http://api:8080).
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: SiaWebhookApi/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # --- Secrets (required in Production; the app refuses to start without them) ---
+      SIA_JWT_SECRET: ${SIA_JWT_SECRET:?set SIA_JWT_SECRET in .env}
+      SIA_ADMIN_PASSWORD: ${SIA_ADMIN_PASSWORD:?set SIA_ADMIN_PASSWORD in .env}
+      ZEPCAM_API_KEY: ${ZEPCAM_API_KEY:?set ZEPCAM_API_KEY in .env}
+      SIA_ENCRYPTION_KEY: ${SIA_ENCRYPTION_KEY:-}
+      # --- SIA receiver config (12-factor: these override appsettings.json at startup) ---
+      # Set these instead of editing via the UI — in-container UI edits do NOT
+      # survive a restart (the app rewrites appsettings.json, which is ephemeral).
+      SiaSettings__IpAddress: ${SIA_RECEIVER_IP:-10.33.26.190}
+      SiaSettings__Port: ${SIA_RECEIVER_PORT:-55001}
+      SiaSettings__AccountNumber: ${SIA_ACCOUNT_NUMBER:-A001}
+      SiaSettings__ReceiverNumber: ${SIA_RECEIVER_NUMBER:-R0}
+      SiaSettings__AccountPrefix: ${SIA_ACCOUNT_PREFIX:-L0}
+      SiaSettings__EventCode: ${SIA_EVENT_CODE:-NPA}
+      # Set these to the Coolify/Traefik proxy source(s) before relying on
+      # X-Forwarded-For for rate limiting/logging.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+      TRUSTED_PROXY_NETWORKS: ${TRUSTED_PROXY_NETWORKS:-}
+    expose:
+      - "8080"
+    ports:
+      # Local-only convenience binding. On Coolify, do not publish the API
+      # directly; route only the webhook path through the platform proxy.
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./webapp
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      # Internal address of the API on the Docker network — never public.
+      API_BASE_URL: http://api:8080
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
