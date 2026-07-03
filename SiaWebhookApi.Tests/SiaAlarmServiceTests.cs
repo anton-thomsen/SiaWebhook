@@ -24,11 +24,22 @@ public class SiaAlarmServiceTests
         UserName       = "John",
         UserExternalId = "U001",
         Issuer         = "ZEPCAM",
+        Timestamp      = DateTimeOffset.UtcNow,
         Location       = new Location { Latitude = "52.3676", Longitude = "4.9041" }
     };
 
-    private static SiaAlarmService BuildService(Mock<ISiaTransmitter> transmitterMock) =>
-        new(transmitterMock.Object, new SiaSequenceCounter(), NullLogger<SiaAlarmService>.Instance);
+    private static SiaAlarmService BuildService(
+        Mock<ISiaTransmitter> transmitterMock,
+        IDeadLetterStore? deadLetterStore = null,
+        IAlertNotifier? alertNotifier = null,
+        SiaDeliveryOptions? options = null) =>
+        new(
+            transmitterMock.Object,
+            new SiaSequenceCounter(),
+            deadLetterStore ?? new InMemoryDeadLetterStore(),
+            alertNotifier ?? new NoopAlertNotifier(),
+            options ?? new SiaDeliveryOptions { InitialRetryDelay = TimeSpan.Zero },
+            NullLogger<SiaAlarmService>.Instance);
 
     // ── Happy path ────────────────────────────────────────────────────
 
@@ -36,13 +47,13 @@ public class SiaAlarmServiceTests
     public async Task SendAlarmAsync_CallsTransmitter_WithCorrectEndpoint()
     {
         var mock = new Mock<ISiaTransmitter>();
-        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()))
-            .ReturnsAsync("ACK");
+        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SiaTransmissionResult.Ack("ACK"));
 
         var svc = BuildService(mock);
         await svc.SendAlarmAsync(MakeDto(), MakeSettings());
 
-        mock.Verify(t => t.SendAsync("127.0.0.1", 9000, It.IsAny<string>()), Times.Once);
+        mock.Verify(t => t.SendAsync("127.0.0.1", 9000, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -51,9 +62,9 @@ public class SiaAlarmServiceTests
         // The final SIA message must be framed as \n{CRC}{LEN}{payload}\r
         var mock = new Mock<ISiaTransmitter>();
         string? captured = null;
-        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()))
-            .Callback<string, int, string>((_, _, msg) => captured = msg)
-            .ReturnsAsync("ACK");
+        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, int, string, CancellationToken>((_, _, msg, _) => captured = msg)
+            .ReturnsAsync(SiaTransmissionResult.Ack("ACK"));
 
         await BuildService(mock).SendAlarmAsync(MakeDto(), MakeSettings());
 
@@ -71,9 +82,9 @@ public class SiaAlarmServiceTests
     {
         var mock = new Mock<ISiaTransmitter>();
         string? captured = null;
-        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()))
-            .Callback<string, int, string>((_, _, msg) => captured = msg)
-            .ReturnsAsync("ACK");
+        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, int, string, CancellationToken>((_, _, msg, _) => captured = msg)
+            .ReturnsAsync(SiaTransmissionResult.Ack("ACK"));
 
         await BuildService(mock).SendAlarmAsync(MakeDto(), MakeSettings());
 
@@ -84,11 +95,54 @@ public class SiaAlarmServiceTests
     public async Task SendAlarmAsync_ReturnsTransmitterResponse()
     {
         var mock = new Mock<ISiaTransmitter>();
-        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()))
-            .ReturnsAsync("ACK \"SIA-DCS\" 0001");
+        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SiaTransmissionResult.Ack("ACK \"SIA-DCS\" 0001"));
 
-        string result = await BuildService(mock).SendAlarmAsync(MakeDto(), MakeSettings());
-        Assert.Equal("ACK \"SIA-DCS\" 0001", result);
+        var result = await BuildService(mock).SendAlarmAsync(MakeDto(), MakeSettings());
+        Assert.True(result.Success);
+        Assert.Equal("ACK \"SIA-DCS\" 0001", result.Response);
+    }
+
+    [Fact]
+    public async Task SendAlarmAsync_WhenAllAttemptsFail_DeadLettersAndAlerts()
+    {
+        var mock = new Mock<ISiaTransmitter>();
+        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SiaTransmissionResult.Failed("Receiver returned NAK", "NAK"));
+
+        var store = new InMemoryDeadLetterStore();
+        var notifier = new RecordingAlertNotifier();
+        var result = await BuildService(
+            mock,
+            store,
+            notifier,
+            new SiaDeliveryOptions { MaxAttempts = 3, InitialRetryDelay = TimeSpan.Zero })
+            .SendAlarmAsync(MakeDto(), MakeSettings());
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.DeadLetterId);
+        Assert.Single(store.Saved);
+        Assert.Single(notifier.Alerts);
+        Assert.Equal(3, result.AttemptErrors.Count);
+    }
+
+    [Fact]
+    public async Task SendAlarmAsync_WhenSecondAttemptSucceeds_DoesNotDeadLetter()
+    {
+        var mock = new Mock<ISiaTransmitter>();
+        mock.SetupSequence(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SiaTransmissionResult.Failed("timeout"))
+            .ReturnsAsync(SiaTransmissionResult.Ack("ACK"));
+
+        var store = new InMemoryDeadLetterStore();
+        var result = await BuildService(
+            mock,
+            store,
+            options: new SiaDeliveryOptions { MaxAttempts = 3, InitialRetryDelay = TimeSpan.Zero })
+            .SendAlarmAsync(MakeDto(), MakeSettings());
+
+        Assert.True(result.Success);
+        Assert.Empty(store.Saved);
     }
 
     // ── Encryption wiring ─────────────────────────────────────────────
@@ -99,9 +153,9 @@ public class SiaAlarmServiceTests
         // When an encryption key is configured the SIA-DCS token must be prefixed with *
         var mock = new Mock<ISiaTransmitter>();
         string? captured = null;
-        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()))
-            .Callback<string, int, string>((_, _, msg) => captured = msg)
-            .ReturnsAsync("ACK");
+        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, int, string, CancellationToken>((_, _, msg, _) => captured = msg)
+            .ReturnsAsync(SiaTransmissionResult.Ack("ACK"));
 
         // 32 ASCII '0' chars = 32-byte key
         string key32 = new string('0', 32);
@@ -115,9 +169,9 @@ public class SiaAlarmServiceTests
     {
         var mock = new Mock<ISiaTransmitter>();
         string? captured = null;
-        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()))
-            .Callback<string, int, string>((_, _, msg) => captured = msg)
-            .ReturnsAsync("ACK");
+        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, int, string, CancellationToken>((_, _, msg, _) => captured = msg)
+            .ReturnsAsync(SiaTransmissionResult.Ack("ACK"));
 
         await BuildService(mock).SendAlarmAsync(MakeDto(), MakeSettings(encryptionKey: null));
 
@@ -131,9 +185,9 @@ public class SiaAlarmServiceTests
     {
         var mock = new Mock<ISiaTransmitter>();
         var captured = new List<string>();
-        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()))
-            .Callback<string, int, string>((_, _, msg) => captured.Add(msg))
-            .ReturnsAsync("ACK");
+        mock.Setup(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, int, string, CancellationToken>((_, _, msg, _) => captured.Add(msg))
+            .ReturnsAsync(SiaTransmissionResult.Ack("ACK"));
 
         var svc = BuildService(mock);
         await svc.SendAlarmAsync(MakeDto(), MakeSettings());
@@ -141,5 +195,39 @@ public class SiaAlarmServiceTests
 
         Assert.Contains("0001", captured[0]);
         Assert.Contains("0002", captured[1]);
+    }
+
+    private sealed class NoopAlertNotifier : IAlertNotifier
+    {
+        public Task NotifyDeadLetteredAsync(DeadLetteredAlarm alarm, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingAlertNotifier : IAlertNotifier
+    {
+        public List<DeadLetteredAlarm> Alerts { get; } = [];
+
+        public Task NotifyDeadLetteredAsync(DeadLetteredAlarm alarm, CancellationToken cancellationToken = default)
+        {
+            Alerts.Add(alarm);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class InMemoryDeadLetterStore : IDeadLetterStore
+    {
+        public List<DeadLetteredAlarm> Saved { get; } = [];
+
+        public Task<string> SaveAsync(DeadLetteredAlarm alarm, CancellationToken cancellationToken = default)
+        {
+            Saved.Add(alarm);
+            return Task.FromResult(alarm.Id);
+        }
+
+        public Task<IReadOnlyList<DeadLetteredAlarm>> ListAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<DeadLetteredAlarm>>(Saved);
+
+        public Task UpdateAsync(DeadLetteredAlarm alarm, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task DeleteAsync(string id, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }

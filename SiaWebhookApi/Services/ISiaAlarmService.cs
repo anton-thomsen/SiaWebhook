@@ -5,5 +5,5 @@ namespace SiaWebhookApi.Services;
 
 public interface ISiaAlarmService
 {
-    Task<string> SendAlarmAsync(DataTransferObject data, SiaSettings settings);
+    Task<SiaAlarmDeliveryResult> SendAlarmAsync(DataTransferObject data, SiaSettings settings, CancellationToken cancellationToken = default);
 }

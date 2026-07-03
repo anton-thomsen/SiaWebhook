@@ -2,9 +2,14 @@
 export interface SiaSettings {
   ipAddress: string;
   port: number;
-  encryptionKey: string | null;
+  encryptionEnabled: boolean;
   accountNumber: string;
   receiverNumber: string;
   accountPrefix: string;
   eventCode: string;
 }
+
+export type SiaSettingsUpdate = Pick<
+  SiaSettings,
+  "accountNumber" | "receiverNumber" | "accountPrefix" | "eventCode"
+>;

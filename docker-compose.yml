@@ -20,26 +20,39 @@ services:
       SIA_ADMIN_PASSWORD: ${SIA_ADMIN_PASSWORD:?set SIA_ADMIN_PASSWORD in .env}
       ZEPCAM_API_KEY: ${ZEPCAM_API_KEY:?set ZEPCAM_API_KEY in .env}
       SIA_ENCRYPTION_KEY: ${SIA_ENCRYPTION_KEY:-}
-      # --- SIA receiver config (12-factor: these override appsettings.json at startup) ---
-      # Set these instead of editing via the UI — in-container UI edits do NOT
-      # survive a restart (the app rewrites appsettings.json, which is ephemeral).
-      SiaSettings__IpAddress: ${SIA_RECEIVER_IP:-10.33.26.190}
-      SiaSettings__Port: ${SIA_RECEIVER_PORT:-55001}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      # --- SIA receiver config: env-only for dangerous routing/secrets ---
+      SIA_RECEIVER_IP: ${SIA_RECEIVER_IP:-10.33.26.190}
+      SIA_RECEIVER_PORT: ${SIA_RECEIVER_PORT:-55001}
+      # --- UI-editable, persisted identity/event defaults ---
       SiaSettings__AccountNumber: ${SIA_ACCOUNT_NUMBER:-A001}
       SiaSettings__ReceiverNumber: ${SIA_RECEIVER_NUMBER:-R0}
       SiaSettings__AccountPrefix: ${SIA_ACCOUNT_PREFIX:-L0}
       SiaSettings__EventCode: ${SIA_EVENT_CODE:-NPA}
+      SIA_SETTINGS_FILE: /app/data/settings.json
+      SIA_SEQUENCE_FILE: /app/data/sia-sequence.txt
+      SIA_DEAD_LETTER_DIR: /app/data/dead-letters
+      WEBHOOK_RATE_LIMIT_PER_MINUTE: ${WEBHOOK_RATE_LIMIT_PER_MINUTE:-60}
+      WEBHOOK_RATE_LIMIT_QUEUE: ${WEBHOOK_RATE_LIMIT_QUEUE:-20}
+      # Set these to the Coolify/Traefik proxy source(s) before relying on X-Forwarded-For.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+      TRUSTED_PROXY_NETWORKS: ${TRUSTED_PROXY_NETWORKS:-}
     expose:
       - "8080"
     ports:
-      # Published for local `docker compose up`. On Coolify the platform handles
-      # external routing + TLS, so you can drop this mapping there.
-      - "8080:8080"
+      # Local-only convenience. On Coolify, do not publish the API directly; route
+      # only the webhook path through the platform proxy.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - api-data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
       interval: 30s
       timeout: 5s
       retries: 3
+    cpus: "0.50"
+    mem_limit: 256m
+    pids_limit: 256
     restart: unless-stopped
 
   web:
@@ -55,4 +68,10 @@ services:
         condition: service_healthy
     ports:
       - "3000:3000"
+    cpus: "0.50"
+    mem_limit: 512m
+    pids_limit: 256
     restart: unless-stopped
+
+volumes:
+  api-data:
