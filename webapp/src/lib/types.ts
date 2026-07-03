@@ -9,3 +9,10 @@ export interface SiaSettings {
   accountPrefix: string;
   eventCode: string;
 }
+
+// The only fields the UI may change. Receiver IP/port and the encryption key
+// are env-managed on the server and read-only here.
+export type SiaSettingsUpdate = Pick<
+  SiaSettings,
+  "accountNumber" | "receiverNumber" | "accountPrefix" | "eventCode"
+>;

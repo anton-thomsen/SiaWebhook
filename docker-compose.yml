@@ -20,11 +20,12 @@ services:
       SIA_ADMIN_PASSWORD: ${SIA_ADMIN_PASSWORD:?set SIA_ADMIN_PASSWORD in .env}
       ZEPCAM_API_KEY: ${ZEPCAM_API_KEY:?set ZEPCAM_API_KEY in .env}
       SIA_ENCRYPTION_KEY: ${SIA_ENCRYPTION_KEY:-}
-      # --- SIA receiver config (12-factor: these override appsettings.json at startup) ---
-      # Set these instead of editing via the UI — in-container UI edits do NOT
-      # survive a restart (the app rewrites appsettings.json, which is ephemeral).
-      SiaSettings__IpAddress: ${SIA_RECEIVER_IP:-10.33.26.190}
-      SiaSettings__Port: ${SIA_RECEIVER_PORT:-55001}
+      # --- SIA receiver routing: env-only, never editable through the UI ---
+      # The app reads these directly and they always win over any stored value,
+      # so a compromised admin session cannot divert alarms elsewhere.
+      SIA_RECEIVER_IP: ${SIA_RECEIVER_IP:-10.33.26.190}
+      SIA_RECEIVER_PORT: ${SIA_RECEIVER_PORT:-55001}
+      # --- UI-editable identity/event defaults ---
       SiaSettings__AccountNumber: ${SIA_ACCOUNT_NUMBER:-A001}
       SiaSettings__ReceiverNumber: ${SIA_RECEIVER_NUMBER:-R0}
       SiaSettings__AccountPrefix: ${SIA_ACCOUNT_PREFIX:-L0}

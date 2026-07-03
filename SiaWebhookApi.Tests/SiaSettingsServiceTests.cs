@@ -9,23 +9,29 @@ using SiaWebhookApi.Services;
 namespace SiaWebhookApi.Tests;
 
 /// <summary>
-/// Blocker 5: GET /api/settings must never return the AES encryption key —
-/// only an encryptionEnabled boolean — and a settings save must not be able
-/// to set or wipe the key.
+/// Blocker 5: GET /api/settings must never return the AES encryption key.
+/// Blocker 4: receiver IP/port are env-managed — a settings update must not
+/// be able to divert alarms to a different endpoint.
 /// </summary>
 public class SiaSettingsServiceTests : IDisposable
 {
     private const string ConfiguredKey = "0123456789abcdef0123456789abcdef";
 
+    private static readonly string[] GuardedEnvVars =
+        ["SIA_ENCRYPTION_KEY", "SIA_RECEIVER_IP", "SIA_RECEIVER_PORT"];
+
     private readonly string _tempDir;
-    private readonly string? _savedEnvKey;
+    private readonly Dictionary<string, string?> _savedEnv = [];
 
     public SiaSettingsServiceTests()
     {
-        // Tests control SIA_ENCRYPTION_KEY explicitly; save and restore the
-        // machine's value so the suite is environment-independent.
-        _savedEnvKey = Environment.GetEnvironmentVariable("SIA_ENCRYPTION_KEY");
-        Environment.SetEnvironmentVariable("SIA_ENCRYPTION_KEY", null);
+        // Tests control these env vars explicitly; save and restore the
+        // machine's values so the suite is environment-independent.
+        foreach (var name in GuardedEnvVars)
+        {
+            _savedEnv[name] = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, null);
+        }
 
         _tempDir = Path.Combine(Path.GetTempPath(), $"sia-settings-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
@@ -34,7 +40,8 @@ public class SiaSettingsServiceTests : IDisposable
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("SIA_ENCRYPTION_KEY", _savedEnvKey);
+        foreach (var (name, value) in _savedEnv)
+            Environment.SetEnvironmentVariable(name, value);
         Directory.Delete(_tempDir, recursive: true);
     }
 
@@ -62,6 +69,16 @@ public class SiaSettingsServiceTests : IDisposable
             config,
             Mock.Of<ISiaTransmitter>());
     }
+
+    private static SiaSettingsUpdateRequest ValidUpdate() => new()
+    {
+        AccountNumber  = "A002",
+        ReceiverNumber = "R1",
+        AccountPrefix  = "L1",
+        EventCode      = "NPA"
+    };
+
+    // ── Blocker 5: no key exposure ────────────────────────────────────
 
     [Fact]
     public void GetPublic_WithConfiguredKey_ReportsEnabledWithoutExposingKey()
@@ -104,43 +121,70 @@ public class SiaSettingsServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task UpdateAsync_ClientSuppliedKey_IsIgnored()
+    public async Task UpdateAsync_PreservesEncryptionKey()
     {
         var svc = BuildService(ConfiguredKey);
 
-        var (success, _) = await svc.UpdateAsync(new SiaSettings
-        {
-            IpAddress      = "10.0.0.1",
-            Port           = 55001,
-            EncryptionKey  = "attacker-controlled-key-value---",
-            AccountNumber  = "A001",
-            ReceiverNumber = "R0",
-            AccountPrefix  = "L0",
-            EventCode      = "NPA"
-        });
-
-        Assert.True(success);
-        Assert.Equal(ConfiguredKey, svc.Get().EncryptionKey);
-    }
-
-    [Fact]
-    public async Task UpdateAsync_NullKey_DoesNotWipeStoredKey()
-    {
-        var svc = BuildService(ConfiguredKey);
-
-        var (success, _) = await svc.UpdateAsync(new SiaSettings
-        {
-            IpAddress      = "10.0.0.1",
-            Port           = 55001,
-            EncryptionKey  = null,
-            AccountNumber  = "A002",
-            ReceiverNumber = "R0",
-            AccountPrefix  = "L0",
-            EventCode      = "NPA"
-        });
+        var (success, _) = await svc.UpdateAsync(ValidUpdate());
 
         Assert.True(success);
         Assert.Equal(ConfiguredKey, svc.Get().EncryptionKey);
         Assert.Equal("A002", svc.Get().AccountNumber);
+    }
+
+    // ── Blocker 4: receiver endpoint cannot be diverted ───────────────
+
+    [Fact]
+    public async Task UpdateAsync_CannotChangeReceiverEndpoint()
+    {
+        var svc = BuildService();
+
+        // The request type has no IP/port fields; a full update must leave
+        // the configured receiver endpoint untouched.
+        var (success, _) = await svc.UpdateAsync(ValidUpdate());
+
+        Assert.True(success);
+        Assert.Equal("10.0.0.1", svc.Get().IpAddress);
+        Assert.Equal(55001, svc.Get().Port);
+    }
+
+    [Fact]
+    public void Get_EnvManagedReceiverEndpoint_AlwaysWins()
+    {
+        Environment.SetEnvironmentVariable("SIA_RECEIVER_IP", "10.99.99.99");
+        Environment.SetEnvironmentVariable("SIA_RECEIVER_PORT", "56000");
+        try
+        {
+            var settings = BuildService().Get();
+
+            Assert.Equal("10.99.99.99", settings.IpAddress);
+            Assert.Equal(56000, settings.Port);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SIA_RECEIVER_IP", null);
+            Environment.SetEnvironmentVariable("SIA_RECEIVER_PORT", null);
+        }
+    }
+
+    [Theory]
+    [InlineData("A[001]")]
+    [InlineData("A|001")]
+    [InlineData("A_001")]
+    [InlineData("A\r001")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task UpdateAsync_ReservedOrMissingIdentityField_IsRejected(string accountNumber)
+    {
+        var svc = BuildService();
+
+        var update = ValidUpdate();
+        update.AccountNumber = accountNumber;
+        var (success, error) = await svc.UpdateAsync(update);
+
+        Assert.False(success);
+        Assert.NotNull(error);
+        // Nothing was applied.
+        Assert.Equal("A001", svc.Get().AccountNumber);
     }
 }

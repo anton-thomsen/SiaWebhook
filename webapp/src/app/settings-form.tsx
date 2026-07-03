@@ -2,28 +2,32 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { SiaSettings } from "@/lib/types";
+import type { SiaSettings, SiaSettingsUpdate } from "@/lib/types";
 
 type Status = { kind: "success" | "error"; text: string } | null;
 
-const IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/;
+// Characters with structural meaning in a SIA DC-09 frame — rejected server-side too.
+const RESERVED = /[\r\n[\]|_]/;
 
 export function SettingsForm({ initial }: { initial: SiaSettings }) {
   const router = useRouter();
 
-  const [form, setForm] = useState<SiaSettings>({ ...initial });
+  const [form, setForm] = useState<SiaSettingsUpdate>({
+    accountNumber: initial.accountNumber,
+    receiverNumber: initial.receiverNumber,
+    accountPrefix: initial.accountPrefix,
+    eventCode: initial.eventCode,
+  });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saveStatus, setSaveStatus] = useState<Status>(null);
   const [testStatus, setTestStatus] = useState<Status>(null);
 
-  function update<K extends keyof SiaSettings>(key: K, value: SiaSettings[K]) {
+  function update<K extends keyof SiaSettingsUpdate>(key: K, value: SiaSettingsUpdate[K]) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
   function validate(): string | null {
-    if (!IPV4.test(form.ipAddress)) return "IP address must be a valid IPv4 address.";
-    if (form.port < 1 || form.port > 65535) return "Port must be between 1 and 65535.";
     for (const [label, val] of [
       ["Account number", form.accountNumber],
       ["Receiver number", form.receiverNumber],
@@ -31,6 +35,7 @@ export function SettingsForm({ initial }: { initial: SiaSettings }) {
       ["Event code", form.eventCode],
     ] as const) {
       if (!val.trim()) return `${label} is required.`;
+      if (RESERVED.test(val)) return `${label} contains a reserved SIA delimiter.`;
     }
     return null;
   }
@@ -45,7 +50,7 @@ export function SettingsForm({ initial }: { initial: SiaSettings }) {
     }
     setSaving(true);
 
-    const payload: SiaSettings = form;
+    const payload: SiaSettingsUpdate = form;
     const res = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -104,33 +109,20 @@ export function SettingsForm({ initial }: { initial: SiaSettings }) {
       </div>
 
       <form onSubmit={onSave} className="space-y-5">
-        <Field label="IP Address">
-          <input
-            type="text"
-            value={form.ipAddress}
-            onChange={(e) => update("ipAddress", e.target.value)}
-            placeholder="e.g. 192.168.1.100"
-            className={inputCls}
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+          <ReadOnlyField label="IP Address" value={initial.ipAddress} />
+          <ReadOnlyField label="Port" value={String(initial.port)} />
+          <ReadOnlyField
+            label="Encryption"
+            value={initial.encryptionEnabled ? "Configured" : "Not configured"}
           />
-        </Field>
-
-        <Field label="Port">
-          <input
-            type="number"
-            value={form.port}
-            onChange={(e) => update("port", Number(e.target.value))}
-            className={inputCls}
-          />
-        </Field>
-
-        <Field
-          label="Encryption"
-          hint="The AES key is configured on the server (SIA_ENCRYPTION_KEY) and never shown here. To rotate it, set a fresh key on both the VPS and the receiver, then redeploy."
-        >
-          <div className="rounded-md border border-black/10 bg-black/[0.03] px-3 py-2 text-sm text-neutral-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-neutral-200">
-            {initial.encryptionEnabled ? "Configured" : "Not configured"}
-          </div>
-        </Field>
+        </div>
+        <p className="text-xs text-neutral-500">
+          Receiver address and encryption are managed on the server (SIA_RECEIVER_IP,
+          SIA_RECEIVER_PORT, SIA_ENCRYPTION_KEY) and cannot be changed here — this
+          prevents a hijacked admin session from diverting alarms. To change them,
+          update the environment variables on the VPS and redeploy.
+        </p>
 
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
           <Field label="Account Number">
@@ -181,6 +173,17 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       <label className="mb-1 block text-sm font-medium">{label}</label>
       {children}
       {hint && <p className="mt-1 text-xs text-neutral-500">{hint}</p>}
+    </div>
+  );
+}
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="mb-1 block text-sm font-medium">{label}</div>
+      <div className="min-h-10 rounded-md border border-black/10 bg-black/[0.03] px-3 py-2 text-sm text-neutral-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-neutral-200">
+        {value}
+      </div>
     </div>
   );
 }

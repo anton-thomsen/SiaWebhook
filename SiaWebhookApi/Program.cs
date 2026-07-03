@@ -113,7 +113,9 @@ app.MapGet("/api/settings", (SiaSettingsService svc) =>
     Results.Ok(svc.GetPublic()))
     .RequireAuthorization();
 
-app.MapPut("/api/settings", async (SiaSettings updated, SiaSettingsService svc) =>
+// Accepts only the harmless identity/event fields. Receiver IP/port and the
+// encryption key are env-managed — not present on the request type at all.
+app.MapPut("/api/settings", async (SiaSettingsUpdateRequest updated, SiaSettingsService svc) =>
 {
     var (success, error) = await svc.UpdateAsync(updated);
     return success ? Results.Ok() : Results.Problem(error);

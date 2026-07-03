@@ -42,6 +42,7 @@ are missing. In **Development** it falls back to insecure defaults with a loud w
 | `SIA_ADMIN_PASSWORD` | Admin login password |
 | `ZEPCAM_API_KEY` | Webhook shared secret |
 | `SIA_ENCRYPTION_KEY` | Optional AES-256 key (32 ASCII chars) |
+| `SIA_RECEIVER_IP`, `SIA_RECEIVER_PORT` | Env-only receiver routing — always win over stored settings, never editable via the UI |
 
 ## Local development
 
@@ -66,9 +67,17 @@ docker compose up --build        # web :3000, api :8080
 ```
 
 For **Coolify**: deploy the two services from this compose file. Give `web` your public
-admin domain. Route the public webhook URL (`…/zepcam-panic`) to `api`. The `web → api`
-hop stays on the internal Docker network via `API_BASE_URL=http://api:8080`; Coolify's
-Traefik handles TLS and `X-Forwarded-For` (the API already trusts forwarded headers).
+admin domain — ideally kept **off the public internet** (SSH tunnel, VPN such as
+Tailscale/WireGuard, Coolify access control, or an IP allow-list). Route **only** the
+public webhook URL (`…/zepcam-panic`) to `api`. The `web → api` hop stays on the internal
+Docker network via `API_BASE_URL=http://api:8080`; Coolify's Traefik handles TLS and
+`X-Forwarded-For` (the API already trusts forwarded headers).
+
+> **Receiver routing is env-only:** `SIA_RECEIVER_IP` / `SIA_RECEIVER_PORT` (and
+> `SIA_ENCRYPTION_KEY`) are read from the environment and always override stored
+> settings. The admin UI shows them read-only — a hijacked admin session cannot
+> divert panic alarms to another endpoint. To change them, update the VPS
+> environment and redeploy.
 
 > **Settings persistence:** the API persists UI edits by rewriting `appsettings.json`,
 > which is **ephemeral in a container** — changes are lost on restart. For durable config,

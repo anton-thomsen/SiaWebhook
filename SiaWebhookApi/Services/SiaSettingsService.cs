@@ -58,6 +58,16 @@ public class SiaSettingsService
                 EventCode      = _current.EventCode
             };
         }
+        // Receiver routing is env-managed on the VPS: env vars always win, so a
+        // compromised admin session can never divert alarms to another endpoint.
+        var envIp = Environment.GetEnvironmentVariable("SIA_RECEIVER_IP");
+        if (!string.IsNullOrWhiteSpace(envIp))
+            copy.IpAddress = envIp;
+
+        var envPort = Environment.GetEnvironmentVariable("SIA_RECEIVER_PORT");
+        if (!string.IsNullOrWhiteSpace(envPort) && int.TryParse(envPort, out var parsedPort))
+            copy.Port = parsedPort;
+
         // Environment variable takes precedence — keeps the secret out of appsettings.json in prod
         var envKey = Environment.GetEnvironmentVariable("SIA_ENCRYPTION_KEY");
         if (!string.IsNullOrEmpty(envKey))
@@ -65,17 +75,21 @@ public class SiaSettingsService
         return copy;
     }
 
-    public async Task<(bool success, string? error)> UpdateAsync(SiaSettings updated)
+    public async Task<(bool success, string? error)> UpdateAsync(SiaSettingsUpdateRequest updated)
     {
-        // The key never round-trips through the UI: whatever the client sends
-        // is ignored, so a settings save can neither set nor wipe it.
+        // Only harmless identity/event fields are UI-writable. Receiver IP/port
+        // and the encryption key are not part of the request type at all —
+        // they are env-managed and cannot be changed through the API.
+        if (HasReservedChars(updated.AccountNumber, updated.ReceiverNumber, updated.AccountPrefix, updated.EventCode))
+            return (false, "SIA identity fields are required and cannot contain reserved delimiter/control characters.");
+
         SiaSettings next;
         lock (_lock)
         {
             next = new SiaSettings
             {
-                IpAddress      = updated.IpAddress,
-                Port           = updated.Port,
+                IpAddress      = _current.IpAddress,
+                Port           = _current.Port,
                 EncryptionKey  = _current.EncryptionKey,
                 AccountNumber  = updated.AccountNumber,
                 ReceiverNumber = updated.ReceiverNumber,
@@ -99,9 +113,13 @@ public class SiaSettingsService
             _current = next;
         }
 
-        _logger.LogInformation("SiaSettings updated: IP={Ip} Port={Port}", updated.IpAddress, updated.Port);
+        _logger.LogInformation("SiaSettings updated: account={Account} receiver={Receiver} event={Event}",
+            updated.AccountNumber, updated.ReceiverNumber, updated.EventCode);
         return (true, null);
     }
+
+    private static bool HasReservedChars(params string[] values) =>
+        values.Any(v => string.IsNullOrWhiteSpace(v) || v.IndexOfAny(['\r', '\n', '[', ']', '|', '_']) >= 0);
 
     private async Task PersistToDiskAsync(SiaSettings settings)
     {
