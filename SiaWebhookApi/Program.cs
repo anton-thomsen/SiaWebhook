@@ -135,12 +135,9 @@ app.MapPost("/zepcam-panic", async (
     SiaSettingsService settingsSvc,
     ISiaAlarmService alarmSvc) =>
 {
-    if (data.Location is null || string.IsNullOrEmpty(data.Location.Latitude) || string.IsNullOrEmpty(data.Location.Longitude))
-        return Results.BadRequest("Missing or incomplete 'location' field (latitude/longitude required).");
-    if (string.IsNullOrEmpty(data.UserName))
-        return Results.BadRequest("Missing 'user_name' field.");
-    if (string.IsNullOrEmpty(data.UserExternalId))
-        return Results.BadRequest("Missing 'user_externalid' field.");
+    var validation = ZepcamWebhookValidator.Validate(data);
+    if (!validation.IsValid)
+        return Results.BadRequest(validation.Error);
 
     await alarmSvc.SendAlarmAsync(data, settingsSvc.Get());
     return Results.Ok(new { Status = "Processed" });

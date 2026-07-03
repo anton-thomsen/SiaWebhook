@@ -18,6 +18,8 @@ public static class SiaMath
         // 1. Get the actual byte count. We use ASCII because C# strings are UTF-16 by default,
         // and the SIA protocol strictly operates on ASCII bytes.
         int byteCount = Encoding.ASCII.GetByteCount(targetString);
+        if (byteCount > ZepcamWebhookValidator.MaxSiaPayloadBytes)
+            throw new ArgumentOutOfRangeException(nameof(targetString), $"SIA payload cannot exceed {ZepcamWebhookValidator.MaxSiaPayloadBytes} bytes.");
 
         // 2. Format as a 4-character hex string starting with '0'.
         // "X3" tells C# to format the integer as a 3-digit uppercase hex string.

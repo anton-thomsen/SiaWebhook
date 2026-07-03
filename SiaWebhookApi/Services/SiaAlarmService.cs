@@ -36,6 +36,7 @@ public class SiaAlarmService : ISiaAlarmService
             : new SiaMessageBuilder(new SiaCryptoService(Encoding.ASCII.GetBytes(settings.EncryptionKey)));
 
         string payload      = messageBuilder.Build(siaMessage);
+        ZepcamWebhookValidator.EnsurePayloadFits(payload);
         string lengthHex    = SiaMath.CalculateLength(payload);
         string crcHex       = SiaMath.CalculateCrc(payload);
         string finalMessage = $"\n{crcHex}{lengthHex}{payload}\r";
