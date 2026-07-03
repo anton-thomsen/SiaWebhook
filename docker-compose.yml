@@ -20,6 +20,10 @@ services:
       SIA_ADMIN_PASSWORD: ${SIA_ADMIN_PASSWORD:?set SIA_ADMIN_PASSWORD in .env}
       ZEPCAM_API_KEY: ${ZEPCAM_API_KEY:?set ZEPCAM_API_KEY in .env}
       SIA_ENCRYPTION_KEY: ${SIA_ENCRYPTION_KEY:-}
+      # Out-of-band alert channel for dead-lettered alarms (n8n webhook). Secret.
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      # Durable dead-letter store on the mounted volume — survives restarts.
+      SIA_DEAD_LETTER_DIR: /app/data/dead-letters
       # --- SIA receiver config (12-factor: these override appsettings.json at startup) ---
       # Set these instead of editing via the UI — in-container UI edits do NOT
       # survive a restart (the app rewrites appsettings.json, which is ephemeral).
@@ -35,6 +39,8 @@ services:
       # Published for local `docker compose up`. On Coolify the platform handles
       # external routing + TLS, so you can drop this mapping there.
       - "8080:8080"
+    volumes:
+      - api-data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
       interval: 30s
@@ -56,3 +62,6 @@ services:
     ports:
       - "3000:3000"
     restart: unless-stopped
+
+volumes:
+  api-data:

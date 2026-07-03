@@ -78,10 +78,15 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 });
 
 // Core services
+var deliveryOptions = SiaDeliveryOptions.Load(builder.Configuration, builder.Environment);
+builder.Services.AddSingleton(deliveryOptions);
 builder.Services.AddSingleton<ISiaTransmitter, SiaTransmitter>();
 builder.Services.AddSingleton<SiaSequenceCounter>();
 builder.Services.AddSingleton<SiaSettingsService>();
+builder.Services.AddSingleton<IDeadLetterStore, FileDeadLetterStore>();
+builder.Services.AddHttpClient<IAlertNotifier, N8nAlertNotifier>();
 builder.Services.AddSingleton<ISiaAlarmService, SiaAlarmService>();
+builder.Services.AddHostedService<DeadLetterRetryService>();
 
 var app = builder.Build();
 
@@ -133,7 +138,8 @@ app.MapPost("/api/settings/test-connection", async (SiaSettingsService svc) =>
 app.MapPost("/zepcam-panic", async (
     DataTransferObject data,
     SiaSettingsService settingsSvc,
-    ISiaAlarmService alarmSvc) =>
+    ISiaAlarmService alarmSvc,
+    CancellationToken cancellationToken) =>
 {
     if (data.Location is null || string.IsNullOrEmpty(data.Location.Latitude) || string.IsNullOrEmpty(data.Location.Longitude))
         return Results.BadRequest("Missing or incomplete 'location' field (latitude/longitude required).");
@@ -142,8 +148,15 @@ app.MapPost("/zepcam-panic", async (
     if (string.IsNullOrEmpty(data.UserExternalId))
         return Results.BadRequest("Missing 'user_externalid' field.");
 
-    await alarmSvc.SendAlarmAsync(data, settingsSvc.Get());
-    return Results.Ok(new { Status = "Processed" });
+    var result = await alarmSvc.SendAlarmAsync(data, settingsSvc.Get(), cancellationToken);
+    // 502 tells Zepcam the alarm was NOT delivered so its own retry (if any)
+    // engages; the alarm itself is already dead-lettered and a human alerted.
+    return result.Success
+        ? Results.Ok(new { Status = "Processed" })
+        : Results.Problem(
+            title: "SIA alarm delivery failed",
+            detail: $"Alarm dead-lettered as {result.DeadLetterId}.",
+            statusCode: StatusCodes.Status502BadGateway);
 })
     .AddEndpointFilter<ZepcamApiKeyFilter>()
     .RequireRateLimiting("zepcam-webhook");

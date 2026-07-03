@@ -24,6 +24,7 @@ public class SiaAlarmServiceTests
         UserName       = "John",
         UserExternalId = "U001",
         Issuer         = "ZEPCAM",
+        Timestamp      = DateTimeOffset.UtcNow,
         Location       = new Location { Latitude = "52.3676", Longitude = "4.9041" }
     };
 
@@ -36,8 +37,18 @@ public class SiaAlarmServiceTests
         return mock;
     }
 
-    private static SiaAlarmService BuildService(Mock<ISiaTransmitter> transmitterMock) =>
-        new(transmitterMock.Object, new SiaSequenceCounter(), NullLogger<SiaAlarmService>.Instance);
+    private static SiaAlarmService BuildService(
+        Mock<ISiaTransmitter> transmitterMock,
+        IDeadLetterStore? deadLetterStore = null,
+        IAlertNotifier? alertNotifier = null,
+        SiaDeliveryOptions? options = null) =>
+        new(
+            transmitterMock.Object,
+            new SiaSequenceCounter(),
+            deadLetterStore ?? new InMemoryDeadLetterStore(),
+            alertNotifier ?? new NoopAlertNotifier(),
+            options ?? new SiaDeliveryOptions { InitialRetryDelay = TimeSpan.Zero },
+            NullLogger<SiaAlarmService>.Instance);
 
     // ── Happy path ────────────────────────────────────────────────────
 
@@ -82,39 +93,93 @@ public class SiaAlarmServiceTests
     }
 
     [Fact]
-    public async Task SendAlarmAsync_AckedTransmission_ReturnsReceiverResponse()
+    public async Task SendAlarmAsync_AckedTransmission_ReturnsDeliveredResult()
     {
         var mock = MockTransmitter(SiaTransmissionResult.Ack("ACK \"SIA-DCS\" 0001"));
 
-        string result = await BuildService(mock).SendAlarmAsync(MakeDto(), MakeSettings());
-        Assert.Equal("ACK \"SIA-DCS\" 0001", result);
+        var result = await BuildService(mock).SendAlarmAsync(MakeDto(), MakeSettings());
+
+        Assert.True(result.Success);
+        Assert.Equal("ACK \"SIA-DCS\" 0001", result.Response);
     }
 
-    // ── Failure path: NAK/DUH/garbage/empty must never read as success ─
+    // ── Retry / dead-letter / alert path ──────────────────────────────
 
     [Theory]
     [InlineData("NAK")]
     [InlineData("DUH")]
     [InlineData("garbage")]
     [InlineData("")]
-    public async Task SendAlarmAsync_UnacknowledgedTransmission_ReturnsError(string receiverResponse)
+    public async Task SendAlarmAsync_UnacknowledgedTransmission_ReturnsFailure(string receiverResponse)
     {
         var mock = MockTransmitter(
             SiaTransmissionResult.Failed(SiaAckParser.DescribeFailure(receiverResponse), receiverResponse));
 
-        string result = await BuildService(mock).SendAlarmAsync(MakeDto(), MakeSettings());
+        var result = await BuildService(mock).SendAlarmAsync(MakeDto(), MakeSettings());
 
-        Assert.StartsWith("ERROR:", result);
+        Assert.False(result.Success);
+        Assert.NotNull(result.DeadLetterId);
     }
 
     [Fact]
-    public async Task SendAlarmAsync_ConnectionFailure_ReturnsError()
+    public async Task SendAlarmAsync_WhenAllAttemptsFail_DeadLettersAndAlerts()
     {
-        var mock = MockTransmitter(SiaTransmissionResult.Failed("Connection timed out after 5 seconds"));
+        var mock = MockTransmitter(SiaTransmissionResult.Failed("Receiver returned NAK", "NAK"));
 
-        string result = await BuildService(mock).SendAlarmAsync(MakeDto(), MakeSettings());
+        var store = new InMemoryDeadLetterStore();
+        var notifier = new RecordingAlertNotifier();
+        var result = await BuildService(
+            mock,
+            store,
+            notifier,
+            new SiaDeliveryOptions { MaxAttempts = 3, InitialRetryDelay = TimeSpan.Zero })
+            .SendAlarmAsync(MakeDto(), MakeSettings());
 
-        Assert.StartsWith("ERROR:", result);
+        Assert.False(result.Success);
+        Assert.NotNull(result.DeadLetterId);
+        Assert.Single(store.Saved);
+        Assert.Single(notifier.Alerts);
+        Assert.Equal(3, result.AttemptErrors.Count);
+        mock.Verify(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+    }
+
+    [Fact]
+    public async Task SendAlarmAsync_WhenSecondAttemptSucceeds_DoesNotDeadLetter()
+    {
+        var mock = new Mock<ISiaTransmitter>();
+        mock.SetupSequence(t => t.SendAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SiaTransmissionResult.Failed("timeout"))
+            .ReturnsAsync(SiaTransmissionResult.Ack("ACK"));
+
+        var store = new InMemoryDeadLetterStore();
+        var result = await BuildService(
+            mock,
+            store,
+            options: new SiaDeliveryOptions { MaxAttempts = 3, InitialRetryDelay = TimeSpan.Zero })
+            .SendAlarmAsync(MakeDto(), MakeSettings());
+
+        Assert.True(result.Success);
+        Assert.Empty(store.Saved);
+    }
+
+    [Fact]
+    public async Task SendAlarmAsync_DeadLetterCarriesForensicContext()
+    {
+        var mock = MockTransmitter(SiaTransmissionResult.Failed("Receiver returned NAK", "NAK"));
+
+        var store = new InMemoryDeadLetterStore();
+        await BuildService(
+            mock,
+            store,
+            options: new SiaDeliveryOptions { MaxAttempts = 2, InitialRetryDelay = TimeSpan.Zero })
+            .SendAlarmAsync(MakeDto(), MakeSettings());
+
+        var deadLetter = Assert.Single(store.Saved);
+        Assert.Equal("John", deadLetter.Webhook.UserName);
+        Assert.Equal("127.0.0.1:9000", deadLetter.ReceiverEndpoint);
+        Assert.Equal(2, deadLetter.Attempts);
+        Assert.Equal(2, deadLetter.Errors.Count);
+        Assert.StartsWith("\n", deadLetter.SiaMessage);
     }
 
     // ── Encryption wiring ─────────────────────────────────────────────
@@ -158,5 +223,39 @@ public class SiaAlarmServiceTests
 
         Assert.Contains("0001", captured[0]);
         Assert.Contains("0002", captured[1]);
+    }
+
+    private sealed class NoopAlertNotifier : IAlertNotifier
+    {
+        public Task NotifyDeadLetteredAsync(DeadLetteredAlarm alarm, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingAlertNotifier : IAlertNotifier
+    {
+        public List<DeadLetteredAlarm> Alerts { get; } = [];
+
+        public Task NotifyDeadLetteredAsync(DeadLetteredAlarm alarm, CancellationToken cancellationToken = default)
+        {
+            Alerts.Add(alarm);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class InMemoryDeadLetterStore : IDeadLetterStore
+    {
+        public List<DeadLetteredAlarm> Saved { get; } = [];
+
+        public Task<string> SaveAsync(DeadLetteredAlarm alarm, CancellationToken cancellationToken = default)
+        {
+            Saved.Add(alarm);
+            return Task.FromResult(alarm.Id);
+        }
+
+        public Task<IReadOnlyList<DeadLetteredAlarm>> ListAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<DeadLetteredAlarm>>(Saved);
+
+        public Task UpdateAsync(DeadLetteredAlarm alarm, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task DeleteAsync(string id, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }
