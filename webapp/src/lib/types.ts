@@ -1,8 +1,9 @@
-// Mirrors SiaWebhookApi.Configuration.SiaSettings (camelCase from System.Text.Json).
+// Mirrors SiaWebhookApi.Configuration.SiaSettingsResponse (camelCase from System.Text.Json).
+// The encryption key itself never reaches the browser — only whether one is configured.
 export interface SiaSettings {
   ipAddress: string;
   port: number;
-  encryptionKey: string | null;
+  encryptionEnabled: boolean;
   accountNumber: string;
   receiverNumber: string;
   accountPrefix: string;

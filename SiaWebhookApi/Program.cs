@@ -108,8 +108,9 @@ app.MapPost("/api/auth/login", (LoginRequest request, AuthService auth) =>
     .RequireRateLimiting("auth-login");
 
 // Settings API endpoints — protected by JWT bearer auth.
+// Returns the public settings view — never the encryption key itself.
 app.MapGet("/api/settings", (SiaSettingsService svc) =>
-    Results.Ok(svc.Get()))
+    Results.Ok(svc.GetPublic()))
     .RequireAuthorization();
 
 app.MapPut("/api/settings", async (SiaSettings updated, SiaSettingsService svc) =>

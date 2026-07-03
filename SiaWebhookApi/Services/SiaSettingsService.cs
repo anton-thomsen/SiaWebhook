@@ -25,6 +25,23 @@ public class SiaSettingsService
             ?? new SiaSettings { IpAddress = "", Port = 0, EncryptionKey = null };
     }
 
+    /// <summary>
+    /// Settings safe to return to the admin UI: the encryption key is reduced
+    /// to a configured/not-configured boolean and never leaves the server.
+    /// </summary>
+    public SiaSettingsResponse GetPublic()
+    {
+        var current = Get();
+        return new SiaSettingsResponse(
+            current.IpAddress,
+            current.Port,
+            !string.IsNullOrEmpty(current.EncryptionKey),
+            current.AccountNumber,
+            current.ReceiverNumber,
+            current.AccountPrefix,
+            current.EventCode);
+    }
+
     public SiaSettings Get()
     {
         SiaSettings copy;
@@ -50,9 +67,26 @@ public class SiaSettingsService
 
     public async Task<(bool success, string? error)> UpdateAsync(SiaSettings updated)
     {
+        // The key never round-trips through the UI: whatever the client sends
+        // is ignored, so a settings save can neither set nor wipe it.
+        SiaSettings next;
+        lock (_lock)
+        {
+            next = new SiaSettings
+            {
+                IpAddress      = updated.IpAddress,
+                Port           = updated.Port,
+                EncryptionKey  = _current.EncryptionKey,
+                AccountNumber  = updated.AccountNumber,
+                ReceiverNumber = updated.ReceiverNumber,
+                AccountPrefix  = updated.AccountPrefix,
+                EventCode      = updated.EventCode
+            };
+        }
+
         try
         {
-            await PersistToDiskAsync(updated);
+            await PersistToDiskAsync(next);
         }
         catch (Exception ex)
         {
@@ -62,16 +96,7 @@ public class SiaSettingsService
 
         lock (_lock)
         {
-            _current = new SiaSettings
-            {
-                IpAddress      = updated.IpAddress,
-                Port           = updated.Port,
-                EncryptionKey  = updated.EncryptionKey,
-                AccountNumber  = updated.AccountNumber,
-                ReceiverNumber = updated.ReceiverNumber,
-                AccountPrefix  = updated.AccountPrefix,
-                EventCode      = updated.EventCode
-            };
+            _current = next;
         }
 
         _logger.LogInformation("SiaSettings updated: IP={Ip} Port={Port}", updated.IpAddress, updated.Port);

@@ -11,11 +11,7 @@ const IPV4 = /^(\d{1,3}\.){3}\d{1,3}$/;
 export function SettingsForm({ initial }: { initial: SiaSettings }) {
   const router = useRouter();
 
-  const [form, setForm] = useState<SiaSettings>({
-    ...initial,
-    encryptionKey: initial.encryptionKey ?? "",
-  });
-  const [showKey, setShowKey] = useState(false);
+  const [form, setForm] = useState<SiaSettings>({ ...initial });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saveStatus, setSaveStatus] = useState<Status>(null);
@@ -28,9 +24,6 @@ export function SettingsForm({ initial }: { initial: SiaSettings }) {
   function validate(): string | null {
     if (!IPV4.test(form.ipAddress)) return "IP address must be a valid IPv4 address.";
     if (form.port < 1 || form.port > 65535) return "Port must be between 1 and 65535.";
-    const key = form.encryptionKey ?? "";
-    if (key.length !== 0 && key.length !== 32)
-      return "Encryption key must be exactly 32 characters or left empty.";
     for (const [label, val] of [
       ["Account number", form.accountNumber],
       ["Receiver number", form.receiverNumber],
@@ -52,10 +45,7 @@ export function SettingsForm({ initial }: { initial: SiaSettings }) {
     }
     setSaving(true);
 
-    const payload: SiaSettings = {
-      ...form,
-      encryptionKey: form.encryptionKey?.trim() ? form.encryptionKey : null,
-    };
+    const payload: SiaSettings = form;
     const res = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -133,22 +123,12 @@ export function SettingsForm({ initial }: { initial: SiaSettings }) {
           />
         </Field>
 
-        <Field label="Encryption Key" hint="32-character ASCII key, or leave blank for unencrypted.">
-          <div className="flex gap-2">
-            <input
-              type={showKey ? "text" : "password"}
-              value={form.encryptionKey ?? ""}
-              onChange={(e) => update("encryptionKey", e.target.value)}
-              placeholder="Leave blank for unencrypted"
-              className={inputCls}
-            />
-            <button
-              type="button"
-              onClick={() => setShowKey((s) => !s)}
-              className="shrink-0 rounded-md border border-black/15 px-3 text-sm hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/5"
-            >
-              {showKey ? "Hide" : "Show"}
-            </button>
+        <Field
+          label="Encryption"
+          hint="The AES key is configured on the server (SIA_ENCRYPTION_KEY) and never shown here. To rotate it, set a fresh key on both the VPS and the receiver, then redeploy."
+        >
+          <div className="rounded-md border border-black/10 bg-black/[0.03] px-3 py-2 text-sm text-neutral-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-neutral-200">
+            {initial.encryptionEnabled ? "Configured" : "Not configured"}
           </div>
         </Field>
 
