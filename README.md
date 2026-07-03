@@ -42,6 +42,7 @@ are missing. In **Development** it falls back to insecure defaults with a loud w
 | `SIA_ADMIN_PASSWORD` | Admin login password |
 | `ZEPCAM_API_KEY` | Webhook shared secret |
 | `SIA_ENCRYPTION_KEY` | Optional AES-256 key (32 ASCII chars) |
+| `TRUSTED_PROXY_IPS`, `TRUSTED_PROXY_NETWORKS` | Comma-separated reverse-proxy sources trusted for `X-Forwarded-*` (loopback only if unset) |
 
 ## Local development
 
@@ -68,7 +69,13 @@ docker compose up --build        # web :3000, api :8080
 For **Coolify**: deploy the two services from this compose file. Give `web` your public
 admin domain. Route the public webhook URL (`…/zepcam-panic`) to `api`. The `web → api`
 hop stays on the internal Docker network via `API_BASE_URL=http://api:8080`; Coolify's
-Traefik handles TLS and `X-Forwarded-For` (the API already trusts forwarded headers).
+Traefik handles TLS and `X-Forwarded-For`.
+
+> **Forwarded-header trust:** the API honours `X-Forwarded-For`/`-Proto` only from the
+> sources listed in `TRUSTED_PROXY_IPS` / `TRUSTED_PROXY_NETWORKS` (loopback only when
+> unset). Configure them for the Coolify/Traefik source before relying on client IPs
+> for rate limiting or logs. The compose file also binds the API's local debug port to
+> `127.0.0.1` so it is never published on every interface.
 
 > **Settings persistence:** the API persists UI edits by rewriting `appsettings.json`,
 > which is **ephemeral in a container** — changes are lost on restart. For durable config,

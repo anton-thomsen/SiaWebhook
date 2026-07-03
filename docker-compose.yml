@@ -29,12 +29,16 @@ services:
       SiaSettings__ReceiverNumber: ${SIA_RECEIVER_NUMBER:-R0}
       SiaSettings__AccountPrefix: ${SIA_ACCOUNT_PREFIX:-L0}
       SiaSettings__EventCode: ${SIA_EVENT_CODE:-NPA}
+      # Set these to the Coolify/Traefik proxy source(s) before relying on
+      # X-Forwarded-For for rate limiting/logging.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+      TRUSTED_PROXY_NETWORKS: ${TRUSTED_PROXY_NETWORKS:-}
     expose:
       - "8080"
     ports:
-      # Published for local `docker compose up`. On Coolify the platform handles
-      # external routing + TLS, so you can drop this mapping there.
-      - "8080:8080"
+      # Local-only convenience binding. On Coolify, do not publish the API
+      # directly; route only the webhook path through the platform proxy.
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
       interval: 30s

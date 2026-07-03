@@ -66,16 +66,10 @@ builder.Services.AddRateLimiter(options =>
             }));
 });
 
-// Honour X-Forwarded-For/Proto from the reverse proxy (Coolify/Traefik) so the
-// client IP used for rate limiting and logging is the real caller, not the proxy.
-// SECURITY: clearing known networks/proxies trusts the forwarded header from any
-// source. Safe only because the container port is reachable solely by the proxy.
-builder.Services.Configure<ForwardedHeadersOptions>(o =>
-{
-    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    o.KnownIPNetworks.Clear();
-    o.KnownProxies.Clear();
-});
+// Honour X-Forwarded-For/Proto only from configured reverse proxies. Set
+// TRUSTED_PROXY_IPS and/or TRUSTED_PROXY_NETWORKS to the Coolify/Traefik
+// source(s) instead of trusting forwarded headers from the whole internet.
+builder.Services.Configure<ForwardedHeadersOptions>(TrustedProxyConfigurator.Configure);
 
 // Core services
 builder.Services.AddSingleton<ISiaTransmitter, SiaTransmitter>();
