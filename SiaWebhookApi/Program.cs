@@ -37,6 +37,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(authOptions.JwtSecret)),
             ValidateLifetime = true,
+            // Pin the accepted signing algorithm: tokens are only ever issued
+            // as HS256, so anything else (alg confusion, downgrade) is rejected.
+            ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
             ClockSkew = TimeSpan.FromSeconds(30)
         };
     });
@@ -149,3 +152,6 @@ app.MapPost("/zepcam-panic", async (
     .RequireRateLimiting("zepcam-webhook");
 
 app.Run();
+
+// Exposes the implicit Program class to WebApplicationFactory-based integration tests.
+public partial class Program;

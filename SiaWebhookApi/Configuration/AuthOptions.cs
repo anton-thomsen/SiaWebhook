@@ -45,6 +45,8 @@ public class AuthOptions
             logger.LogWarning("{Message} Current length: {Length}. Token signing may fail.", msg, opts.JwtSecret.Length);
         }
 
+        ValidateAdminPassword(logger, opts.AdminPassword, isProduction);
+
         return opts;
     }
 
@@ -62,5 +64,31 @@ public class AuthOptions
             "Auth secret {EnvVar} is not set — using an INSECURE development default. " +
             "Set {EnvVar} as an environment variable before deploying to production.", envName, envName);
         return devDefault;
+    }
+
+    private static void ValidateAdminPassword(ILogger logger, string password, bool isProduction)
+    {
+        var problems = new List<string>();
+        if (password.Length < 12)
+            problems.Add("at least 12 characters");
+        if (!password.Any(char.IsUpper))
+            problems.Add("one uppercase letter");
+        if (!password.Any(char.IsLower))
+            problems.Add("one lowercase letter");
+        if (!password.Any(char.IsDigit))
+            problems.Add("one digit");
+        if (!password.Any(ch => !char.IsLetterOrDigit(ch)))
+            problems.Add("one symbol");
+        if (string.Equals(password, DevAdminPassword, StringComparison.Ordinal))
+            problems.Add("not the development default");
+
+        if (problems.Count == 0)
+            return;
+
+        var message = "SIA_ADMIN_PASSWORD is too weak; require " + string.Join(", ", problems) + ".";
+        if (isProduction)
+            throw new InvalidOperationException(message);
+
+        logger.LogWarning("{Message}", message);
     }
 }

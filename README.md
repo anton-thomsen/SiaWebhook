@@ -39,7 +39,7 @@ are missing. In **Development** it falls back to insecure defaults with a loud w
 | Variable | Purpose |
 |---|---|
 | `SIA_JWT_SECRET` | JWT signing key (≥32 chars) |
-| `SIA_ADMIN_PASSWORD` | Admin login password |
+| `SIA_ADMIN_PASSWORD` | Admin login password (Production requires 12+ chars with upper/lower/digit/symbol) |
 | `ZEPCAM_API_KEY` | Webhook shared secret |
 | `SIA_ENCRYPTION_KEY` | Optional AES-256 key (32 ASCII chars) |
 
@@ -49,7 +49,7 @@ are missing. In **Development** it falls back to insecure defaults with a loud w
 # API (terminal 1)
 cd SiaWebhookApi
 SIA_JWT_SECRET=dev-secret-0123456789ABCDEF-0123456789 \
-SIA_ADMIN_PASSWORD=admin123 ZEPCAM_API_KEY=zepcam-local-key \
+SIA_ADMIN_PASSWORD='Admin12345!' ZEPCAM_API_KEY=zepcam-local-key \
 dotnet run                       # http://localhost:5257
 
 # Web (terminal 2)
