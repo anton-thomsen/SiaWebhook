@@ -44,13 +44,15 @@ public class SiaAlarmService : ISiaAlarmService
             siaMessage.SequenceNumber, siaMessage.AccountNumber, siaMessage.EventCode,
             settings.IpAddress, settings.Port);
 
-        string response = await _transmitter.SendAsync(settings.IpAddress, settings.Port, finalMessage);
+        var result = await _transmitter.SendAsync(settings.IpAddress, settings.Port, finalMessage);
 
-        if (response.StartsWith("ERROR:"))
-            _logger.LogError("SIA alarm send failed: {Response}", response);
-        else
-            _logger.LogInformation("SIA alarm acknowledged: {Response}", response);
+        if (!result.Success)
+        {
+            _logger.LogError("SIA alarm send failed: {Error}", result.Error);
+            return $"ERROR: {result.Error}";
+        }
 
-        return response;
+        _logger.LogInformation("SIA alarm acknowledged: {Response}", result.Response);
+        return result.Response!;
     }
 }

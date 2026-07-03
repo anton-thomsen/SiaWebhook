@@ -105,8 +105,8 @@ public class SiaSettingsService
         var s = Get();
         try
         {
-            string result = await _transmitter.SendAsync(s.IpAddress, s.Port, "");
-            return result.StartsWith("ERROR:") ? (false, result) : (true, null);
+            var result = await _transmitter.SendAsync(s.IpAddress, s.Port, "");
+            return result.Success ? (true, null) : (false, result.Error);
         }
         catch (Exception ex)
         {
