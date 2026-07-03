@@ -2,6 +2,7 @@ using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
 using SiaWebhookApi.Models;
 using SiaWebhookApi.Services;
@@ -146,6 +147,12 @@ app.MapPost("/zepcam-panic", async (
     return Results.Ok(new { Status = "Processed" });
 })
     .AddEndpointFilter<ZepcamApiKeyFilter>()
-    .RequireRateLimiting("zepcam-webhook");
+    .RequireRateLimiting("zepcam-webhook")
+    // Legit Zepcam payloads are well under 1 KB; 8 KB gives headroom while
+    // making body-size DoS impossible (Kestrel default is 30 MB).
+    .WithMetadata(new RequestSizeLimitAttribute(8192));
 
 app.Run();
+
+// Exposes the implicit Program class to WebApplicationFactory-based integration tests.
+public partial class Program;
